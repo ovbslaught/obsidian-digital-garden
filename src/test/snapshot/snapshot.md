@@ -177,7 +177,7 @@ this plugin has custom filter that turns 🌞 (snow emoji) into 🌞 (THE SUN). 
 {"dg-publish":true,"permalink":"/006-custom-title/","title":"006 THIS IS A CUSTOM TITLE"}
 ---
 
-[Custom title](https://dg-docs.ole.dev/advanced/note-specific-settings/)
+[Custom title](https://docs.forestry.md/advanced/note-specific-settings/)
 
 ==========
 007 Custom permalink.md
@@ -186,7 +186,7 @@ this plugin has custom filter that turns 🌞 (snow emoji) into 🌞 (THE SUN). 
 {"dg-publish":true,"dg-permalink":"my-name-is-permalink/custom-permalink","permalink":"/my-name-is-permalink/custom-permalink/"}
 ---
 
-[Custom permalink](https://dg-docs.ole.dev/advanced/note-specific-settings/)
+[Custom permalink](https://docs.forestry.md/advanced/note-specific-settings/)
 
 
 ==========
@@ -412,7 +412,7 @@ E Embeds/E04 PNG reuse.md
 
 This file uses the same image as in [[E Embeds/E03 PNG_not_published\|E03 PNG_not_published]]. When removing the other one, the image should not be removed. 
 
-![unused_image.png|100](/img/user/A%20Assets/unused_image.png)
+![unused_image.png\|100](/img/user/A%20Assets/unused_image.png)
 /img/user/A Assets/travolta.png
 ,/img/user/A Assets/unused_image.png
 ==========
@@ -435,13 +435,31 @@ E Embeds/E07 Image with alt attributes.md
 ---
 
 This should render to a 200 px wide image with the alt text "center"
-Like so: `![travolta.png|center|200](/img/user/A%20Assets/travolta.png)`
-![travolta.png|center|200](/img/user/A%20Assets/travolta.png)
+Like so: `![travolta.png\|center\|200](/img/user/A%20Assets/travolta.png)`
+![travolta.png\|center\|200](/img/user/A%20Assets/travolta.png)
 
 
 This should render to an image with the alt text "left", like so:
-`[travolta.png|left](/img/user/A%20Assets/travolta.png)`
-![travolta.png|left](/img/user/A%20Assets/travolta.png)
+`[travolta.png\|left](/img/user/A%20Assets/travolta.png)`
+![travolta.png\|left](/img/user/A%20Assets/travolta.png)
+/img/user/A Assets/travolta.png
+,/img/user/A Assets/unused_image.png
+,/img/user/A Assets/travolta.webp
+==========
+E Embeds/E08 Images in tables.md
+==========
+---
+{"dg-publish":true,"permalink":"/e-embeds/e08-images-in-tables/"}
+---
+
+Images with resize syntax inside tables should render correctly.
+The pipe in the image size syntax is escaped as `\|` inside tables.
+
+| Image | Name |
+| ----- | ---- |
+| ![travolta.png\|100](/img/user/A%20Assets/travolta.png) | Travolta resized |
+| ![travolta.png](/img/user/A%20Assets/travolta.png) | Travolta full size |
+
 /img/user/A Assets/travolta.png
 ,/img/user/A Assets/unused_image.png
 ,/img/user/A Assets/travolta.webp
@@ -515,9 +533,10 @@ Bonus:
 </div></div>
 
 
-Bonus pic: 
+Bonus pic:
 
-![travolta.png|100](/img/user/A%20Assets/travolta.png)
+
+![travolta.png\|100](/img/user/A%20Assets/travolta.png)
 
 
 
@@ -538,7 +557,7 @@ E Embeds/Transclusions/T2 Too deep to transclude.md
 
 This one isn't isn't transcluded anymore (too deep)
 
-![travolta.png|100](/img/user/A%20Assets/travolta.png)
+![travolta.png\|100](/img/user/A%20Assets/travolta.png)
 /img/user/A Assets/travolta.png
 ,/img/user/A Assets/unused_image.png
 ,/img/user/A Assets/travolta.webp
@@ -714,6 +733,14 @@ Body under header
 
 </div></div>
 
+
+## Some Header
+
+Same-file header link should be converted
+[[L Links/01 Link to header#Some Header\|#Some Header]]
+
+Same-file header link with custom display text
+[[L Links/01 Link to header#Some Header\|custom display]]
 /img/user/A Assets/travolta.png
 ,/img/user/A Assets/unused_image.png
 ,/img/user/A Assets/travolta.webp
@@ -730,8 +757,8 @@ I'm a list of all files in this folder:
 - [[P Plugins/PD Dataview/PD1 Dataview\|PD1 Dataview]]
 - [[P Plugins/PD Dataview/PD2 Inline queries\|PD2 Inline queries]]
 - [[P Plugins/PD Dataview/PD3 Inline JS queries\|PD3 Inline JS queries]]
-- [[P Plugins/PD Dataview/PD4 DataviewJs queries\|PD4 DataviewJs queries]]
 - [[P Plugins/PD Dataview/PD5.1 Dataview in transclusions\|PD5.1 Dataview in transclusions]]
+- [[P Plugins/PD Dataview/PD4 DataviewJs queries\|PD4 DataviewJs queries]]
 - [[P Plugins/PD Dataview/PD5.2 Dataview in transclusions\|PD5.2 Dataview in transclusions]]
 - [[P Plugins/PE Excalidraw/PE1 Transcluded excalidraw\|PE1 Transcluded excalidraw]]
 - [[P Plugins/PE Excalidraw/PE2 excalidraw with image\|PE2 excalidraw with image]]
@@ -766,7 +793,7 @@ P Plugins/PD Dataview/PD3 Inline JS queries.md
 
 
 3
-112
+114
 <p><span>A paragraph</span></p>
 
 /img/user/A Assets/travolta.png
@@ -781,7 +808,7 @@ P Plugins/PD Dataview/PD4 DataviewJs queries.md
 
 <h2><span>Header 2</span></h2><p><span>PD4 DataviewJs queries</span></p>
 
-<div><table class="dataview table-view-table"><thead class="table-view-thead"><tr class="table-view-tr-header"><th class="table-view-th"><span>name</span><span class="dataview small-text">6</span></th><th class="table-view-th"><span>link</span></th></tr></thead><tbody class="table-view-tbody"><tr><td><span>005 Custom filters</span></td><td><span><a data-tooltip-position="top" aria-label="005 Custom filters.md" data-href="005 Custom filters.md" href="005 Custom filters.md" class="internal-link" target="_blank" rel="noopener">005 Custom filters</a></span></td></tr><tr><td><span>006 Custom title</span></td><td><span><a data-tooltip-position="top" aria-label="006 Custom title.md" data-href="006 Custom title.md" href="006 Custom title.md" class="internal-link" target="_blank" rel="noopener">006 Custom title</a></span></td></tr><tr><td><span>007 Custom permalink</span></td><td><span><a data-tooltip-position="top" aria-label="007 Custom permalink.md" data-href="007 Custom permalink.md" href="007 Custom permalink.md" class="internal-link" target="_blank" rel="noopener">007 Custom permalink</a></span></td></tr><tr><td><span>011 Custom updatedAt</span></td><td><span><a data-tooltip-position="top" aria-label="011 Custom updatedAt.md" data-href="011 Custom updatedAt.md" href="011 Custom updatedAt.md" class="internal-link" target="_blank" rel="noopener">011 Custom updatedAt</a></span></td></tr><tr><td><span>013 Custom path</span></td><td><span><a data-tooltip-position="top" aria-label="013 Custom path.md" data-href="013 Custom path.md" href="013 Custom path.md" class="internal-link" target="_blank" rel="noopener">013 Custom path</a></span></td></tr><tr><td><span>014 Customer path and permalink</span></td><td><span><a data-tooltip-position="top" aria-label="014 Customer path and permalink.md" data-href="014 Customer path and permalink.md" href="014 Customer path and permalink.md" class="internal-link" target="_blank" rel="noopener">014 Customer path and permalink</a></span></td></tr></tbody></table></div>
+<div><table class="dataview table-view-table"><thead class="table-view-thead"><tr class="table-view-tr-header"><th class="table-view-th"><span>name</span><span class="dataview small-text">6</span></th><th class="table-view-th"><span>link</span></th></tr></thead><tbody class="table-view-tbody"><tr><td><span>005 Custom filters</span></td><td><span><a data-tooltip-position="top" aria-label="005 Custom filters.md" data-href="005 Custom filters.md" href="005 Custom filters.md" class="internal-link" target="_blank" rel="noopener nofollow">005 Custom filters</a></span></td></tr><tr><td><span>006 Custom title</span></td><td><span><a data-tooltip-position="top" aria-label="006 Custom title.md" data-href="006 Custom title.md" href="006 Custom title.md" class="internal-link" target="_blank" rel="noopener nofollow">006 Custom title</a></span></td></tr><tr><td><span>007 Custom permalink</span></td><td><span><a data-tooltip-position="top" aria-label="007 Custom permalink.md" data-href="007 Custom permalink.md" href="007 Custom permalink.md" class="internal-link" target="_blank" rel="noopener nofollow">007 Custom permalink</a></span></td></tr><tr><td><span>011 Custom updatedAt</span></td><td><span><a data-tooltip-position="top" aria-label="011 Custom updatedAt.md" data-href="011 Custom updatedAt.md" href="011 Custom updatedAt.md" class="internal-link" target="_blank" rel="noopener nofollow">011 Custom updatedAt</a></span></td></tr><tr><td><span>013 Custom path</span></td><td><span><a data-tooltip-position="top" aria-label="013 Custom path.md" data-href="013 Custom path.md" href="013 Custom path.md" class="internal-link" target="_blank" rel="noopener nofollow">013 Custom path</a></span></td></tr><tr><td><span>014 Customer path and permalink</span></td><td><span><a data-tooltip-position="top" aria-label="014 Customer path and permalink.md" data-href="014 Customer path and permalink.md" href="014 Customer path and permalink.md" class="internal-link" target="_blank" rel="noopener nofollow">014 Customer path and permalink</a></span></td></tr></tbody></table></div>
 
 
 /img/user/A Assets/travolta.png
@@ -851,7 +878,7 @@ P Plugins/PE Excalidraw/PE2 excalidraw with image.md
 #known-issue 
 
 
-<style> .container {font-family: sans-serif; text-align: center;} .button-wrapper button {z-index: 1;height: 40px; width: 100px; margin: 10px;padding: 5px;} .excalidraw .App-menu_top .buttonList { display: flex;} .excalidraw-wrapper { height: 800px; margin: 50px; position: relative;} :root[dir="ltr"] .excalidraw .layer-ui__wrapper .zen-mode-transition.App-menu_bottom--transition-left {transform: none;} </style><script src="https://cdn.jsdelivr.net/npm/react@17/umd/react.production.min.js"></script><script src="https://cdn.jsdelivr.net/npm/react-dom@17/umd/react-dom.production.min.js"></script><script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0/dist/excalidraw.production.min.js"></script><div id="with_imageexcalidraw.md1"></div><script>(function(){const InitialData={"type":"excalidraw","version":2,"source":"https://github.com/zsviczian/obsidian-excalidraw-plugin/releases/tag/1.9.19","elements":[{"type":"text","version":17,"versionNonce":1765827278,"isDeleted":false,"id":"etjlThVL","fillStyle":"hachure","strokeWidth":1,"strokeStyle":"solid","roughness":1,"opacity":100,"angle":0,"x":-87.19921875,"y":99.1875,"strokeColor":"#1e1e1e","backgroundColor":"transparent","width":120.55990600585938,"height":25,"seed":1087805266,"groupIds":[],"frameId":null,"roundness":null,"boundElements":[],"updated":1696178356575,"link":null,"locked":false,"fontSize":20,"fontFamily":1,"text":"tis an image","rawText":"tis an image","textAlign":"left","verticalAlign":"top","containerId":null,"originalText":"tis an image","lineHeight":1.25,"baseline":18},{"type":"text","version":91,"versionNonce":1701927762,"isDeleted":false,"id":"Pu1GJH4c","fillStyle":"hachure","strokeWidth":1,"strokeStyle":"solid","roughness":1,"opacity":100,"angle":0,"x":-149.30078125,"y":152.25390625,"strokeColor":"#1e1e1e","backgroundColor":"transparent","width":310.2197265625,"height":25,"seed":1793030738,"groupIds":[],"frameId":null,"roundness":null,"boundElements":[],"updated":1696178434561,"link":null,"locked":false,"fontSize":20,"fontFamily":1,"text":"it's not uploaded automatically","rawText":"it's not uploaded automatically","textAlign":"left","verticalAlign":"top","containerId":null,"originalText":"it's not uploaded automatically","lineHeight":1.25,"baseline":18},{"type":"text","version":23,"versionNonce":2137370830,"isDeleted":false,"id":"m40NMLqr","fillStyle":"hachure","strokeWidth":1,"strokeStyle":"solid","roughness":1,"opacity":100,"angle":0,"x":-130.09765625,"y":232.0859375,"strokeColor":"#1e1e1e","backgroundColor":"transparent","width":220.039794921875,"height":25,"seed":546057938,"groupIds":[],"frameId":null,"roundness":null,"boundElements":[],"updated":1696178440853,"link":null,"locked":false,"fontSize":20,"fontFamily":1,"text":"this is a bug of sorts","rawText":"this is a bug of sorts","textAlign":"left","verticalAlign":"top","containerId":null,"originalText":"this is a bug of sorts","lineHeight":1.25,"baseline":18},{"id":"HcrLXEvs44rS67hJzeV1v","type":"image","x":-175.90966796875,"y":-266.54738451086945,"width":356.52173913043475,"height":356.52173913043475,"angle":0,"strokeColor":"transparent","backgroundColor":"transparent","fillStyle":"hachure","strokeWidth":1,"strokeStyle":"solid","roughness":1,"opacity":100,"groupIds":[],"frameId":null,"roundness":null,"seed":1427244047,"version":24,"versionNonce":350668687,"isDeleted":false,"boundElements":null,"updated":1696271725883,"link":null,"locked":false,"status":"pending","fileId":"f5de7e7b9672dcaec815dbbc90d72635f638da20","scale":[1,1]}],"appState":{"theme":"light","viewBackgroundColor":"#ffffff","currentItemStrokeColor":"#1e1e1e","currentItemBackgroundColor":"transparent","currentItemFillStyle":"hachure","currentItemStrokeWidth":1,"currentItemStrokeStyle":"solid","currentItemRoughness":1,"currentItemOpacity":100,"currentItemFontFamily":1,"currentItemFontSize":20,"currentItemTextAlign":"left","currentItemStartArrowhead":null,"currentItemEndArrowhead":"arrow","scrollX":156.7996136209239,"scrollY":234.79127038043467,"zoom":{"value":1.1500000000000001},"currentItemRoundness":"round","gridSize":null,"gridColor":{"Bold":"#C9C9C9FF","Regular":"#EDEDEDFF"},"currentStrokeOptions":null,"previousGridSize":null,"frameRendering":{"enabled":true,"clip":true,"name":true,"outline":true}},"files":{}};InitialData.scrollToContent=true;App=()=>{const e=React.useRef(null),t=React.useRef(null),[n,i]=React.useState({width:void 0,height:void 0});return React.useEffect(()=>{i({width:t.current.getBoundingClientRect().width,height:t.current.getBoundingClientRect().height});const e=()=>{i({width:t.current.getBoundingClientRect().width,height:t.current.getBoundingClientRect().height})};return window.addEventListener("resize",e),()=>window.removeEventListener("resize",e)},[t]),React.createElement(React.Fragment,null,React.createElement("div",{className:"excalidraw-wrapper",ref:t},React.createElement(ExcalidrawLib.Excalidraw,{ref:e,width:n.width,height:n.height,initialData:InitialData,viewModeEnabled:!0,zenModeEnabled:!0,gridModeEnabled:!1})))},excalidrawWrapper=document.getElementById("with_imageexcalidraw.md1");ReactDOM.render(React.createElement(App),excalidrawWrapper);})();</script>
+<style> .container {font-family: sans-serif; text-align: center;} .button-wrapper button {z-index: 1;height: 40px; width: 100px; margin: 10px;padding: 5px;} .excalidraw .App-menu_top .buttonList { display: flex;} .excalidraw-wrapper { height: 800px; margin: 50px; position: relative;} :root[dir="ltr"] .excalidraw .layer-ui__wrapper .zen-mode-transition.App-menu_bottom--transition-left {transform: none;} </style><script src="https://cdn.jsdelivr.net/npm/react@17/umd/react.production.min.js"></script><script src="https://cdn.jsdelivr.net/npm/react-dom@17/umd/react-dom.production.min.js"></script><script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0/dist/excalidraw.production.min.js"></script><div id="with_imageexcalidraw.md1"></div><script>(function(){const InitialData={"type":"excalidraw","version":2,"source":"https://github.com/zsviczian/obsidian-excalidraw-plugin/releases/tag/1.9.19","elements":[{"type":"text","version":17,"versionNonce":1765827278,"isDeleted":false,"id":"etjlThVL","fillStyle":"hachure","strokeWidth":1,"strokeStyle":"solid","roughness":1,"opacity":100,"angle":0,"x":-87.19921875,"y":99.1875,"strokeColor":"#1e1e1e","backgroundColor":"transparent","width":120.55990600585938,"height":25,"seed":1087805266,"groupIds":[],"frameId":null,"roundness":null,"boundElements":[],"updated":1696178356575,"link":null,"locked":false,"fontSize":20,"fontFamily":1,"text":"tis an image","rawText":"tis an image","textAlign":"left","verticalAlign":"top","containerId":null,"originalText":"tis an image","lineHeight":1.25,"baseline":18},{"type":"text","version":91,"versionNonce":1701927762,"isDeleted":false,"id":"Pu1GJH4c","fillStyle":"hachure","strokeWidth":1,"strokeStyle":"solid","roughness":1,"opacity":100,"angle":0,"x":-149.30078125,"y":152.25390625,"strokeColor":"#1e1e1e","backgroundColor":"transparent","width":310.2197265625,"height":25,"seed":1793030738,"groupIds":[],"frameId":null,"roundness":null,"boundElements":[],"updated":1696178434561,"link":null,"locked":false,"fontSize":20,"fontFamily":1,"text":"it's not uploaded automatically","rawText":"it's not uploaded automatically","textAlign":"left","verticalAlign":"top","containerId":null,"originalText":"it's not uploaded automatically","lineHeight":1.25,"baseline":18},{"type":"text","version":23,"versionNonce":2137370830,"isDeleted":false,"id":"m40NMLqr","fillStyle":"hachure","strokeWidth":1,"strokeStyle":"solid","roughness":1,"opacity":100,"angle":0,"x":-130.09765625,"y":232.0859375,"strokeColor":"#1e1e1e","backgroundColor":"transparent","width":220.039794921875,"height":25,"seed":546057938,"groupIds":[],"frameId":null,"roundness":null,"boundElements":[],"updated":1696178440853,"link":null,"locked":false,"fontSize":20,"fontFamily":1,"text":"this is a bug of sorts","rawText":"this is a bug of sorts","textAlign":"left","verticalAlign":"top","containerId":null,"originalText":"this is a bug of sorts","lineHeight":1.25,"baseline":18},{"id":"HcrLXEvs44rS67hJzeV1v","type":"image","x":-175.90966796875,"y":-266.54738451086945,"width":356.52173913043475,"height":356.52173913043475,"angle":0,"strokeColor":"transparent","backgroundColor":"transparent","fillStyle":"hachure","strokeWidth":1,"strokeStyle":"solid","roughness":1,"opacity":100,"groupIds":[],"frameId":null,"roundness":null,"seed":1427244047,"version":24,"versionNonce":350668687,"isDeleted":false,"boundElements":null,"updated":1696271725883,"link":null,"locked":false,"status":"pending","fileId":"f5de7e7b9672dcaec815dbbc90d72635f638da20","scale":[1,1]}],"appState":{"theme":"light","viewBackgroundColor":"#ffffff","currentItemStrokeColor":"#1e1e1e","currentItemBackgroundColor":"transparent","currentItemFillStyle":"hachure","currentItemStrokeWidth":1,"currentItemStrokeStyle":"solid","currentItemRoughness":1,"currentItemOpacity":100,"currentItemFontFamily":1,"currentItemFontSize":20,"currentItemTextAlign":"left","currentItemStartArrowhead":null,"currentItemEndArrowhead":"arrow","scrollX":156.7996136209239,"scrollY":234.79127038043467,"zoom":{"value":1},"currentItemRoundness":"round","gridSize":null,"gridColor":{"Bold":"#C9C9C9FF","Regular":"#EDEDEDFF"},"currentStrokeOptions":null,"previousGridSize":null,"frameRendering":{"enabled":true,"clip":true,"name":true,"outline":true}},"files":{}};InitialData.scrollToContent=true;App=()=>{const e=React.useRef(null),t=React.useRef(null),[n,i]=React.useState({width:void 0,height:void 0});return React.useEffect(()=>{i({width:t.current.getBoundingClientRect().width,height:t.current.getBoundingClientRect().height});const e=()=>{i({width:t.current.getBoundingClientRect().width,height:t.current.getBoundingClientRect().height})};return window.addEventListener("resize",e),()=>window.removeEventListener("resize",e)},[t]),React.createElement(React.Fragment,null,React.createElement("div",{className:"excalidraw-wrapper",ref:t},React.createElement(ExcalidrawLib.Excalidraw,{ref:e,width:n.width,height:n.height,initialData:InitialData,viewModeEnabled:!0,zenModeEnabled:!0,gridModeEnabled:!1})))},excalidrawWrapper=document.getElementById("with_imageexcalidraw.md1");ReactDOM.render(React.createElement(App),excalidrawWrapper);})();</script>
 
 
 /img/user/A Assets/travolta.png

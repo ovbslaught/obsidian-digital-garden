@@ -13,6 +13,7 @@ export default interface DigitalGardenSettings {
 	theme: string;
 	baseTheme: string;
 	faviconPath: string;
+	logoPath: string;
 	mainLanguage: string;
 	useFullResolutionImages: boolean;
 
@@ -63,7 +64,30 @@ export default interface DigitalGardenSettings {
 		dgLinkPreview: boolean;
 		dgShowTags: boolean;
 	};
+
+	uiStrings: {
+		backlinkHeader: string;
+		noBacklinksMessage: string;
+		searchButtonText: string;
+		searchPlaceholder: string;
+		searchNotStarted: string;
+		searchEnterHotkey: string;
+		searchEnterHint: string;
+		searchNavigateHotkey: string;
+		searchNavigateHint: string;
+		searchCloseHotkey: string;
+		searchCloseHint: string;
+		searchNoResults: string;
+		searchPreviewPlaceholder: string;
+		canvasDragHint: string;
+		canvasZoomHint: string;
+		canvasResetHint: string;
+	};
+
+	navigationOrder?: Record<string, string[]>;
+
 	ENABLE_DEVELOPER_TOOLS?: boolean;
 	devPluginPath?: string;
 	logLevel?: ILogLevel;
+	localExportPath?: string;
 }

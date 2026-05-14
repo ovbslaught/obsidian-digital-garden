@@ -5,7 +5,9 @@ import {
 	hasPublishFlag,
 	isPublishFrontmatterValid,
 } from "../publishFile/Validator";
-import { PathRewriteRules } from "../repositoryConnection/DigitalGardenSiteManager";
+import DigitalGardenSiteManager, {
+	PathRewriteRules,
+} from "../repositoryConnection/DigitalGardenSiteManager";
 import DigitalGardenSettings from "../models/settings";
 import { Assets, GardenPageCompiler } from "../compiler/GardenPageCompiler";
 import { CompiledPublishFile, PublishFile } from "../publishFile/PublishFile";
@@ -13,6 +15,7 @@ import Logger from "js-logger";
 import { RepositoryConnection } from "../repositoryConnection/RepositoryConnection";
 import PublishPlatformConnectionFactory from "src/repositoryConnection/PublishPlatformConnectionFactory";
 import { PublishPlatform } from "../models/PublishPlatform";
+import { LimitReachedError } from "../forestry/LimitReachedError";
 
 export interface MarkedForPublishing {
 	notes: PublishFile[];
@@ -56,14 +59,100 @@ export default class Publisher {
 		return hasPublishFlag(frontMatter);
 	}
 
+	/**
+	 * Check if a canvas file should be published by reading its JSON metadata.
+	 * Canvas files store frontmatter in the metadata.frontmatter field.
+	 */
+	async shouldPublishCanvas(file: TFile): Promise<boolean> {
+		if (file.extension !== "canvas") {
+			return this.shouldPublish(file);
+		}
+
+		try {
+			const content = await this.vault.cachedRead(file);
+			const canvasData = JSON.parse(content);
+			const frontMatter = canvasData?.metadata?.frontmatter;
+
+			return hasPublishFlag(frontMatter);
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Extract asset paths (images and PDFs) from a canvas file.
+	 * Canvas files can reference assets via file nodes and group backgrounds.
+	 */
+	async extractCanvasAssets(file: TFile): Promise<string[]> {
+		const images: string[] = [];
+
+		const imageExtensions = [
+			"png",
+			"jpg",
+			"jpeg",
+			"gif",
+			"webp",
+			"svg",
+			"bmp",
+			"pdf",
+		];
+
+		try {
+			const content = await this.vault.cachedRead(file);
+			const canvasData = JSON.parse(content);
+
+			if (!canvasData.nodes || !Array.isArray(canvasData.nodes)) {
+				return images;
+			}
+
+			for (const node of canvasData.nodes) {
+				// File nodes can reference images
+				if (node.type === "file" && node.file) {
+					const ext = node.file.split(".").pop()?.toLowerCase();
+
+					if (ext && imageExtensions.includes(ext)) {
+						images.push(node.file);
+					}
+				}
+
+				// Group nodes can have background images
+				if (node.type === "group" && node.background) {
+					const ext = node.background.split(".").pop()?.toLowerCase();
+
+					if (ext && imageExtensions.includes(ext)) {
+						images.push(node.background);
+					}
+				}
+			}
+		} catch (e) {
+			Logger.error(
+				`Failed to extract images from canvas ${file.path}`,
+				e,
+			);
+		}
+
+		return images;
+	}
+
 	async getFilesMarkedForPublishing(): Promise<MarkedForPublishing> {
-		const files = this.vault.getMarkdownFiles();
+		// Get both markdown and canvas files
+		const markdownFiles = this.vault.getMarkdownFiles();
+		const allFiles = this.vault.getFiles();
+		const canvasFiles = allFiles.filter((f) => f.extension === "canvas");
+		const files = [...markdownFiles, ...canvasFiles];
+
 		const notesToPublish: PublishFile[] = [];
 		const imagesToPublish: Set<string> = new Set();
 
 		for (const file of files) {
 			try {
-				if (this.shouldPublish(file)) {
+				// Use async check for canvas files (they store frontmatter in JSON)
+				const shouldPublish =
+					file.extension === "canvas"
+						? await this.shouldPublishCanvas(file)
+						: this.shouldPublish(file);
+
+				if (shouldPublish) {
 					const publishFile = new PublishFile({
 						file,
 						vault: this.vault,
@@ -74,9 +163,17 @@ export default class Publisher {
 
 					notesToPublish.push(publishFile);
 
-					const images = await publishFile.getImageLinks();
+					// Extract image links from markdown files
+					if (file.extension === "md") {
+						const images = await publishFile.getImageLinks();
+						images.forEach((i) => imagesToPublish.add(i));
+					}
 
-					images.forEach((i) => imagesToPublish.add(i));
+					// Extract asset links (images and PDFs) from canvas files
+					if (file.extension === "canvas") {
+						const assets = await this.extractCanvasAssets(file);
+						assets.forEach((i) => imagesToPublish.add(i));
+					}
 				}
 			} catch (e) {
 				Logger.error(e);
@@ -124,12 +221,16 @@ export default class Publisher {
 
 		try {
 			const [text, assets] = file.compiledFile;
+			const remoteImageHashes = await this.getRemoteImageHashes();
 
 			await this.uploadText(file.getPath(), text, file?.remoteHash);
-			await this.uploadAssets(assets);
+			await this.uploadAssets(assets, remoteImageHashes);
 
 			return true;
 		} catch (error) {
+			if (error instanceof LimitReachedError) {
+				throw error;
+			}
 			console.error(error);
 
 			return false;
@@ -174,14 +275,45 @@ export default class Publisher {
 				),
 			);
 
-			await userGardenConnection.updateFiles(filesToPublish);
+			const remoteImageHashes = await this.getRemoteImageHashes();
+
+			await userGardenConnection.updateFiles(
+				filesToPublish,
+				remoteImageHashes,
+			);
 
 			return true;
 		} catch (error) {
+			if (error instanceof LimitReachedError) {
+				throw error;
+			}
 			console.error(error);
 
 			return false;
 		}
+	}
+
+	private async getRemoteImageHashes(): Promise<Record<string, string>> {
+		const userGardenConnection = new RepositoryConnection(
+			await PublishPlatformConnectionFactory.createPublishPlatformConnection(
+				this.settings,
+			),
+		);
+
+		const contentTree = await userGardenConnection
+			.getContent("HEAD")
+			.catch(() => undefined);
+
+		if (!contentTree) {
+			return {};
+		}
+
+		const siteManager = new DigitalGardenSiteManager(
+			this.metadataCache,
+			this.settings,
+		);
+
+		return siteManager.getImageHashes(contentTree);
 	}
 
 	private async uploadToGithub(
@@ -229,11 +361,26 @@ export default class Publisher {
 		await this.uploadToGithub(path, content, sha);
 	}
 
-	private async uploadAssets(assets: Assets) {
-		for (let idx = 0; idx < assets.images.length; idx++) {
-			const image = assets.images[idx];
+	private async uploadAssets(
+		assets: Assets,
+		remoteImageHashes: Record<string, string> = {},
+	) {
+		for (const image of assets.images) {
+			// Convert asset path to hash key: /img/user/attachments/image.png -> attachments/image.png
+			const hashKey = image.path.replace("/img/user/", "");
+			const remoteHash = remoteImageHashes[hashKey];
 
-			await this.uploadImage(image.path, image.content, image.remoteHash);
+			// Skip if unchanged (local hash matches remote hash)
+			if (
+				remoteHash &&
+				image.localHash &&
+				remoteHash === image.localHash
+			) {
+				Logger.debug(`Skipping unchanged image: ${image.path}`);
+				continue;
+			}
+
+			await this.uploadImage(image.path, image.content, remoteHash);
 		}
 	}
 

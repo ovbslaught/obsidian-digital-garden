@@ -2,6 +2,7 @@ import { Octokit } from "@octokit/core";
 import Logger from "js-logger";
 import { CompiledPublishFile } from "src/publishFile/PublishFile";
 import { IPublishPlatformConnection } from "src/models/IPublishPlatformConnection";
+import { throwIfLimitError } from "src/forestry/LimitReachedError";
 
 const logger = Logger.get("repository-connection");
 
@@ -127,6 +128,7 @@ export class RepositoryConnection {
 
 			return result;
 		} catch (error) {
+			throwIfLimitError(error);
 			logger.error(error);
 
 			return false;
@@ -185,6 +187,7 @@ export class RepositoryConnection {
 				payload,
 			);
 		} catch (error) {
+			throwIfLimitError(error);
 			logger.error(error);
 		}
 	}
@@ -279,7 +282,10 @@ export class RepositoryConnection {
 		);
 	}
 
-	async updateFiles(files: CompiledPublishFile[]) {
+	async updateFiles(
+		files: CompiledPublishFile[],
+		remoteImageHashes: Record<string, string> = {},
+	) {
 		const latestCommit = await this.getLatestCommit();
 
 		if (!latestCommit) {
@@ -321,33 +327,55 @@ export class RepositoryConnection {
 					sha: blob.data.sha,
 				};
 			} catch (error) {
+				throwIfLimitError(error);
 				logger.error(error);
 			}
 		});
 
-		const treeAssetPromises = files
-			.flatMap((x) => x.compiledFile[1].images)
-			.map(async (asset) => {
-				try {
-					const blob = await this.octokit.request(
-						"POST /repos/{owner}/{repo}/git/blobs",
-						{
-							...this.getBasePayload(),
-							content: asset.content,
-							encoding: "base64",
-						},
-					);
+		// Filter out unchanged images before creating blobs
+		const allImages = files.flatMap((x) => x.compiledFile[1].images);
 
-					return {
-						path: `${IMAGE_PATH_BASE}${normalizePath(asset.path)}`,
-						mode: "100644",
-						type: "blob",
-						sha: blob.data.sha,
-					};
-				} catch (error) {
-					logger.error(error);
-				}
-			});
+		const imagesToUpload = allImages.filter((asset) => {
+			// Convert asset path to hash key: /img/user/attachments/image.png -> attachments/image.png
+			const hashKey = asset.path.replace("/img/user/", "");
+			const remoteHash = remoteImageHashes[hashKey];
+
+			// Skip if unchanged (local hash matches remote hash)
+			if (
+				remoteHash &&
+				asset.localHash &&
+				remoteHash === asset.localHash
+			) {
+				logger.debug(`Skipping unchanged image: ${asset.path}`);
+
+				return false;
+			}
+
+			return true;
+		});
+
+		const treeAssetPromises = imagesToUpload.map(async (asset) => {
+			try {
+				const blob = await this.octokit.request(
+					"POST /repos/{owner}/{repo}/git/blobs",
+					{
+						...this.getBasePayload(),
+						content: asset.content,
+						encoding: "base64",
+					},
+				);
+
+				return {
+					path: `${IMAGE_PATH_BASE}${normalizePath(asset.path)}`,
+					mode: "100644",
+					type: "blob",
+					sha: blob.data.sha,
+				};
+			} catch (error) {
+				throwIfLimitError(error);
+				logger.error(error);
+			}
+		});
 		treePromises.push(...treeAssetPromises);
 
 		const treeList = await Promise.all(treePromises);

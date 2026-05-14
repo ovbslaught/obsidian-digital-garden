@@ -20,7 +20,10 @@ import { Base64 } from "js-base64";
 import DigitalGardenSettings from "../../models/settings";
 import Publisher from "../../publisher/Publisher";
 import { arrayBufferToBase64 } from "../../utils/utils";
-import { SvgFileSuggest } from "../../ui/suggest/file-suggest";
+import {
+	ImageFileSuggest,
+	SvgFileSuggest,
+} from "../../ui/suggest/file-suggest";
 import { addFilterInput } from "./addFilterInput";
 import { GithubSettings } from "./GithubSettings";
 import RewriteSettings from "./RewriteSettings.svelte";
@@ -31,6 +34,9 @@ import {
 import Logger from "js-logger";
 import ForestrySettings from "./ForestrySettings.svelte";
 import { PublishPlatform } from "src/models/PublishPlatform";
+import PublishPlatformConnectionFactory from "../../repositoryConnection/PublishPlatformConnectionFactory";
+import { NavigationOrderModal } from "../NavigationOrder/NavigationOrderModal";
+import { RepositoryConnection } from "../../repositoryConnection/RepositoryConnection";
 
 interface IObsidianTheme {
 	name: string;
@@ -82,6 +88,8 @@ export default class SettingView {
 		}
 	}
 
+	private updateSectionAnchor: HTMLElement | null = null;
+
 	async initialize(prModal: Modal) {
 		this.prModal = prModal;
 		this.settingsRootElement.empty();
@@ -94,13 +102,16 @@ export default class SettingView {
 			attr: { style: "margin-bottom: 10px;" },
 		});
 
+		// Placeholder for the template update section (rendered async, inserted at top)
+		this.updateSectionAnchor = this.settingsRootElement.createDiv();
+
 		linkDiv.createEl("span", {
 			text: "Remember to read the setup guide if you haven't already. It can be found ",
 		});
 
 		linkDiv.createEl("a", {
 			text: "here.",
-			href: "https://dg-docs.ole.dev/getting-started/01-getting-started/",
+			href: "https://docs.forestry.md/getting-started/01-getting-started/",
 		});
 
 		new Setting(this.settingsRootElement)
@@ -139,7 +150,7 @@ export default class SettingView {
 		const publishPlatformSettings = this.settingsRootElement.createEl(
 			"div",
 			{
-				cls: "connection-status",
+				cls: "publish-platform-settings",
 			},
 		);
 
@@ -162,6 +173,24 @@ export default class SettingView {
 		this.initializeThemesSettings();
 
 		this.settingsRootElement
+			.createEl("h3", { text: "Localization" })
+			.prepend(this.getIcon("languages"));
+		this.initializeUIStringsSettings();
+
+		new Setting(this.settingsRootElement)
+			.setName("Navigation Order")
+			.setDesc(
+				"Customize the order of files and folders in your site's navigation.",
+			)
+			.addButton((cb) => {
+				cb.setButtonText("Reorder Navigation");
+
+				cb.onClick(async () => {
+					await this.openNavigationOrderModal();
+				});
+			});
+
+		this.settingsRootElement
 			.createEl("h3", { text: "Advanced" })
 			.prepend(this.getIcon("cog"));
 
@@ -178,6 +207,43 @@ export default class SettingView {
 				});
 			});
 		this.initializeCustomFilterSettings();
+
+		new Setting(this.settingsRootElement)
+			.setName("Enable debug logging")
+			.setDesc(
+				"Show detailed logs in the developer console. Useful for troubleshooting.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.settings.logLevel === Logger.DEBUG)
+					.onChange(async (value) => {
+						this.settings.logLevel = value
+							? Logger.DEBUG
+							: undefined;
+						Logger.setLevel(value ? Logger.DEBUG : Logger.WARN);
+						await this.saveSettings();
+					});
+			});
+
+		this.settingsRootElement
+			.createEl("h3", { text: "Local Export" })
+			.prepend(this.getIcon("folder-output"));
+
+		new Setting(this.settingsRootElement)
+			.setName("Local garden folder path")
+			.setDesc(
+				"Absolute path to your local digital garden folder. Used by the 'Export Garden to Local Folder' command.",
+			)
+			.addText((text) => {
+				text.setPlaceholder("/path/to/your/digitalgarden")
+					.setValue(this.settings.localExportPath ?? "")
+					.onChange(async (value) => {
+						this.settings.localExportPath = value;
+						await this.saveSettings();
+					});
+				text.inputEl.style.width = "300px";
+			});
+
 		prModal.titleEl.createEl("h1", "Site template settings");
 	}
 
@@ -218,7 +284,7 @@ export default class SettingView {
 
 		linkDiv.createEl("a", {
 			text: "here.",
-			href: "https://dg-docs.ole.dev/getting-started/03-note-settings/",
+			href: "https://docs.forestry.md/getting-started/03-note-settings/",
 		});
 
 		new Setting(this.settingsRootElement)
@@ -488,6 +554,470 @@ export default class SettingView {
 			});
 	}
 
+	private async initializeUIStringsSettings() {
+		const uiStringsModal = new Modal(this.app);
+		uiStringsModal.containerEl.addClass("dg-settings");
+		let hasUnsavedChanges = false;
+
+		// Store text control references for updating after fetch
+		const textControls: Record<string, TextComponent> = {};
+
+		uiStringsModal.titleEl.createEl("h1", {
+			text: "UI Text Settings",
+		});
+
+		const descDiv = uiStringsModal.contentEl.createEl("div", {
+			attr: { style: "margin-bottom: 20px;" },
+		});
+
+		descDiv.createEl("span", {
+			text: "Customize text displayed on your garden. Leave empty to use defaults.",
+		});
+
+		new Setting(this.settingsRootElement)
+			.setName("UI Text / Localization")
+			.setDesc(
+				"Customize labels and messages shown on your garden (Search, Backlinks, etc.)",
+			)
+			.addButton((cb) => {
+				cb.setButtonText("Manage UI text");
+
+				cb.onClick(async () => {
+					hasUnsavedChanges = false;
+					updateApplyButton();
+					uiStringsModal.open();
+					await loadRemoteSettings();
+				});
+			});
+
+		// Helper to mark settings as changed
+		const markAsChanged = () => {
+			hasUnsavedChanges = true;
+			updateApplyButton();
+		};
+
+		// Apply button container
+		const applyContainer = uiStringsModal.contentEl.createDiv({
+			cls: "dg-apply-settings-container",
+		});
+
+		const statusEl = applyContainer.createDiv({
+			cls: "dg-apply-settings-status",
+		});
+
+		const applyButton = applyContainer.createEl("button", {
+			text: "Apply changes to site",
+			cls: "mod-cta dg-apply-settings-button",
+		});
+
+		applyButton.addEventListener("click", async () => {
+			if (!hasUnsavedChanges) return;
+
+			await this.saveSiteSettingsAndUpdateEnv(
+				this.app.metadataCache,
+				this.settings,
+				this.saveSettings,
+			);
+			hasUnsavedChanges = false;
+			updateApplyButton();
+		});
+
+		const updateApplyButton = () => {
+			if (hasUnsavedChanges) {
+				statusEl.setText("You have unsaved changes");
+				statusEl.style.color = "var(--text-warning)";
+				applyContainer.classList.add("has-changes");
+				applyButton.disabled = false;
+			} else {
+				statusEl.setText("Change a setting to apply");
+				statusEl.style.color = "var(--text-muted)";
+				applyContainer.classList.remove("has-changes");
+				applyButton.disabled = true;
+			}
+		};
+
+		// Mapping of env keys to control keys and settings keys
+		const uiStringsMap: Array<{
+			envKey: string;
+			controlKey: string;
+			settingsKey: keyof typeof this.settings.uiStrings;
+		}> = [
+			{
+				envKey: "UI_BACKLINK_HEADER",
+				controlKey: "backlinkHeader",
+				settingsKey: "backlinkHeader",
+			},
+			{
+				envKey: "UI_NO_BACKLINKS_MESSAGE",
+				controlKey: "noBacklinksMessage",
+				settingsKey: "noBacklinksMessage",
+			},
+			{
+				envKey: "UI_SEARCH_BUTTON_TEXT",
+				controlKey: "searchButtonText",
+				settingsKey: "searchButtonText",
+			},
+			{
+				envKey: "UI_SEARCH_PLACEHOLDER",
+				controlKey: "searchPlaceholder",
+				settingsKey: "searchPlaceholder",
+			},
+			{
+				envKey: "UI_SEARCH_ENTER_HINT",
+				controlKey: "searchEnterHint",
+				settingsKey: "searchEnterHint",
+			},
+			{
+				envKey: "UI_SEARCH_NAVIGATE_HINT",
+				controlKey: "searchNavigateHint",
+				settingsKey: "searchNavigateHint",
+			},
+			{
+				envKey: "UI_SEARCH_CLOSE_HINT",
+				controlKey: "searchCloseHint",
+				settingsKey: "searchCloseHint",
+			},
+			{
+				envKey: "UI_SEARCH_NO_RESULTS",
+				controlKey: "searchNoResults",
+				settingsKey: "searchNoResults",
+			},
+			{
+				envKey: "UI_SEARCH_PREVIEW_PLACEHOLDER",
+				controlKey: "searchPreviewPlaceholder",
+				settingsKey: "searchPreviewPlaceholder",
+			},
+			{
+				envKey: "UI_SEARCH_NOT_STARTED_TEXT",
+				controlKey: "searchNotStarted",
+				settingsKey: "searchNotStarted",
+			},
+			{
+				envKey: "UI_SEARCH_ENTER_HOTKEY",
+				controlKey: "searchEnterHotkey",
+				settingsKey: "searchEnterHotkey",
+			},
+			{
+				envKey: "UI_SEARCH_NAVIGATE_HOTKEY",
+				controlKey: "searchNavigateHotkey",
+				settingsKey: "searchNavigateHotkey",
+			},
+			{
+				envKey: "UI_SEARCH_CLOSE_HOTKEY",
+				controlKey: "searchCloseHotkey",
+				settingsKey: "searchCloseHotkey",
+			},
+			{
+				envKey: "UI_CANVAS_DRAG_HINT",
+				controlKey: "canvasDragHint",
+				settingsKey: "canvasDragHint",
+			},
+			{
+				envKey: "UI_CANVAS_ZOOM_HINT",
+				controlKey: "canvasZoomHint",
+				settingsKey: "canvasZoomHint",
+			},
+			{
+				envKey: "UI_CANVAS_RESET_HINT",
+				controlKey: "canvasResetHint",
+				settingsKey: "canvasResetHint",
+			},
+		];
+
+		// Load settings from remote .env file
+		const loadRemoteSettings = async () => {
+			statusEl.setText("Loading settings from site...");
+			applyContainer.classList.remove("has-changes");
+
+			try {
+				const gardenManager = new DigitalGardenSiteManager(
+					this.app.metadataCache,
+					this.settings,
+				);
+
+				const connection =
+					await gardenManager.getUserGardenConnection();
+				const envFile = await connection.getFile(".env");
+
+				if (envFile?.content) {
+					const envContent = Base64.decode(envFile.content);
+					const remoteSettings = this.parseEnvSettings(envContent);
+
+					// Update controls with remote values
+					for (const mapping of uiStringsMap) {
+						const control = textControls[mapping.controlKey];
+
+						if (mapping.envKey in remoteSettings && control) {
+							const value = remoteSettings[mapping.envKey];
+							control.setValue(value);
+
+							this.settings.uiStrings[mapping.settingsKey] =
+								value;
+						}
+					}
+				}
+
+				hasUnsavedChanges = false;
+				updateApplyButton();
+			} catch (error) {
+				console.error("Failed to load remote UI strings:", error);
+				statusEl.setText("Could not load remote settings");
+				statusEl.style.color = "var(--text-error)";
+
+				setTimeout(() => {
+					statusEl.style.color = "";
+					hasUnsavedChanges = false;
+					updateApplyButton();
+				}, 3000);
+			}
+		};
+
+		updateApplyButton();
+
+		// Backlinks Section
+		uiStringsModal.contentEl
+			.createEl("h3", { text: "Backlinks" })
+			.prepend(this.getIcon("link"));
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Backlink header")
+			.setDesc('Default: "Pages mentioning this page"')
+			.addText((text) => {
+				textControls["backlinkHeader"] = text;
+
+				text.setPlaceholder("Pages mentioning this page")
+					.setValue(this.settings.uiStrings?.backlinkHeader ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.backlinkHeader = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("No backlinks message")
+			.setDesc('Default: "No other pages mentions this page"')
+			.addText((text) => {
+				textControls["noBacklinksMessage"] = text;
+
+				text.setPlaceholder("No other pages mentions this page")
+					.setValue(this.settings.uiStrings?.noBacklinksMessage ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.noBacklinksMessage = val;
+						markAsChanged();
+					});
+			});
+
+		// Search Section
+		uiStringsModal.contentEl
+			.createEl("h3", { text: "Search" })
+			.prepend(this.getIcon("search"));
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Search button text")
+			.setDesc('Default: "Search"')
+			.addText((text) => {
+				textControls["searchButtonText"] = text;
+
+				text.setPlaceholder("Search")
+					.setValue(this.settings.uiStrings?.searchButtonText ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchButtonText = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Search placeholder")
+			.setDesc('Default: "Start typing..."')
+			.addText((text) => {
+				textControls["searchPlaceholder"] = text;
+
+				text.setPlaceholder("Start typing...")
+					.setValue(this.settings.uiStrings?.searchPlaceholder ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchPlaceholder = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Enter to select hint")
+			.setDesc('Default: "Enter to select"')
+			.addText((text) => {
+				textControls["searchEnterHint"] = text;
+
+				text.setPlaceholder("Enter to select")
+					.setValue(this.settings.uiStrings?.searchEnterHint ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchEnterHint = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Navigate hint")
+			.setDesc('Default: "to navigate"')
+			.addText((text) => {
+				textControls["searchNavigateHint"] = text;
+
+				text.setPlaceholder("to navigate")
+					.setValue(this.settings.uiStrings?.searchNavigateHint ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchNavigateHint = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Close hint")
+			.setDesc('Default: "ESC to close"')
+			.addText((text) => {
+				textControls["searchCloseHint"] = text;
+
+				text.setPlaceholder("ESC to close")
+					.setValue(this.settings.uiStrings?.searchCloseHint ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchCloseHint = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("No results message")
+			.setDesc('Default: "No results for"')
+			.addText((text) => {
+				textControls["searchNoResults"] = text;
+
+				text.setPlaceholder("No results for")
+					.setValue(this.settings.uiStrings?.searchNoResults ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchNoResults = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Preview placeholder text")
+			.setDesc('Default: "Select a result to preview"')
+			.addText((text) => {
+				textControls["searchPreviewPlaceholder"] = text;
+
+				text.setPlaceholder("Select a result to preview")
+					.setValue(
+						this.settings.uiStrings?.searchPreviewPlaceholder ?? "",
+					)
+					.onChange((val) => {
+						this.settings.uiStrings.searchPreviewPlaceholder = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Search not started text")
+			.setDesc('Default: "Enter your search text in the box above"')
+			.addText((text) => {
+				textControls["searchNotStarted"] = text;
+
+				text.setPlaceholder("Enter your search text in the box above")
+					.setValue(this.settings.uiStrings?.searchNotStarted ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchNotStarted = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Enter hotkey label")
+			.setDesc('Default: "Enter"')
+			.addText((text) => {
+				textControls["searchEnterHotkey"] = text;
+
+				text.setPlaceholder("Enter")
+					.setValue(this.settings.uiStrings?.searchEnterHotkey ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchEnterHotkey = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Navigate hotkey label")
+			.setDesc('Default: "⇅"')
+			.addText((text) => {
+				textControls["searchNavigateHotkey"] = text;
+
+				text.setPlaceholder("⇅")
+					.setValue(
+						this.settings.uiStrings?.searchNavigateHotkey ?? "",
+					)
+					.onChange((val) => {
+						this.settings.uiStrings.searchNavigateHotkey = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Close hotkey label")
+			.setDesc('Default: "ESC"')
+			.addText((text) => {
+				textControls["searchCloseHotkey"] = text;
+
+				text.setPlaceholder("ESC")
+					.setValue(this.settings.uiStrings?.searchCloseHotkey ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.searchCloseHotkey = val;
+						markAsChanged();
+					});
+			});
+
+		// Canvas section
+		uiStringsModal.contentEl
+			.createEl("h3", { text: "Canvas" })
+			.addClass("dg-ui-strings-section-header");
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Drag hint")
+			.setDesc('Default: "Drag to pan"')
+			.addText((text) => {
+				textControls["canvasDragHint"] = text;
+
+				text.setPlaceholder("Drag to pan")
+					.setValue(this.settings.uiStrings?.canvasDragHint ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.canvasDragHint = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Zoom hint")
+			.setDesc('Default: "Scroll to zoom"')
+			.addText((text) => {
+				textControls["canvasZoomHint"] = text;
+
+				text.setPlaceholder("Scroll to zoom")
+					.setValue(this.settings.uiStrings?.canvasZoomHint ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.canvasZoomHint = val;
+						markAsChanged();
+					});
+			});
+
+		new Setting(uiStringsModal.contentEl)
+			.setName("Reset hint")
+			.setDesc('Default: "Double-click to reset"')
+			.addText((text) => {
+				textControls["canvasResetHint"] = text;
+
+				text.setPlaceholder("Double-click to reset")
+					.setValue(this.settings.uiStrings?.canvasResetHint ?? "")
+					.onChange((val) => {
+						this.settings.uiStrings.canvasResetHint = val;
+						markAsChanged();
+					});
+			});
+	}
+
 	private async initializeThemesSettings() {
 		const themeModal = new Modal(this.app);
 		themeModal.containerEl.addClass("dg-settings");
@@ -670,12 +1200,38 @@ export default class SettingView {
 			cb.setCta();
 
 			cb.onClick(async (_ev) => {
-				const octokit = new Octokit({
-					auth: this.settings.githubToken,
-				});
 				new Notice("Applying settings to site...");
 				await this.saveSettingsAndUpdateEnv();
-				await this.addFavicon(octokit);
+
+				const connection =
+					await PublishPlatformConnectionFactory.createPublishPlatformConnection(
+						this.settings,
+					);
+				const octokit = connection.octoKit;
+				const owner = connection.userName;
+				const repo = connection.pageName;
+
+				try {
+					await this.addFavicon(octokit, owner, repo);
+				} catch (error) {
+					Logger.error("Failed to update favicon", error);
+
+					new Notice(
+						"Failed to update favicon. Check the developer console for details.",
+					);
+				}
+
+				try {
+					await this.addLogo(octokit, owner, repo);
+				} catch (error) {
+					Logger.error("Failed to update logo", error);
+
+					new Notice(
+						"Failed to update logo. Check the developer console for details.",
+					);
+				}
+
+				new Notice("Settings applied to site!");
 			});
 		};
 
@@ -959,6 +1515,22 @@ export default class SettingView {
 			});
 
 		new Setting(themeSection)
+			.setName("Logo")
+			.setDesc(
+				"Path to an image in your vault to use as a logo instead of the sitename. Leave blank to show sitename text.",
+			)
+			.addText((tc) => {
+				tc.setPlaceholder("mylogo.png");
+				tc.setValue(this.settings.logoPath);
+
+				tc.onChange(async (val) => {
+					this.settings.logoPath = val;
+					await this.saveSettings();
+				});
+				new ImageFileSuggest(this.app, tc.inputEl);
+			});
+
+		new Setting(themeSection)
 			.setName("Main language")
 			.setDesc(
 				"Language code (ISO 639-1) for the main language of your site. This is used to set the correct language on your site to assist search engines and browsers.",
@@ -1132,7 +1704,7 @@ export default class SettingView {
 			.createEl("div", { cls: "dg-docs-link" })
 			.createEl("a", {
 				text: "Documentation on note icons",
-				href: "https://dg-docs.ole.dev/advanced/note-specific-settings/#note-icons",
+				href: "https://docs.forestry.md/advanced/note-specific-settings/#note-icons",
 			});
 
 		new Setting(noteIconsSection)
@@ -1284,7 +1856,7 @@ export default class SettingView {
 		return settings;
 	}
 
-	private async addFavicon(octokit: Octokit) {
+	private async addFavicon(octokit: Octokit, owner: string, repo: string) {
 		let base64SettingsFaviconContent = "";
 
 		if (this.settings.faviconPath) {
@@ -1300,11 +1872,14 @@ export default class SettingView {
 			const faviconContent = await this.app.vault.readBinary(faviconFile);
 			base64SettingsFaviconContent = arrayBufferToBase64(faviconContent);
 		} else {
-			const defaultFavicon = await octokit.request(
+			const baseConnection =
+				PublishPlatformConnectionFactory.createBaseGardenConnection();
+
+			const defaultFavicon = await baseConnection.octoKit.request(
 				"GET /repos/{owner}/{repo}/contents/{path}",
 				{
-					owner: "oleeskild",
-					repo: "digitalgarden",
+					owner: baseConnection.userName,
+					repo: baseConnection.pageName,
 					path: "src/site/favicon.svg",
 				},
 			);
@@ -1312,7 +1887,6 @@ export default class SettingView {
 			base64SettingsFaviconContent = defaultFavicon.data.content;
 		}
 
-		//The getting and setting sha when putting can be generalized into a utility function
 		let faviconExists = true;
 		let faviconsAreIdentical = false;
 		let currentFaviconOnSite = null;
@@ -1321,15 +1895,16 @@ export default class SettingView {
 			currentFaviconOnSite = await octokit.request(
 				"GET /repos/{owner}/{repo}/contents/{path}",
 				{
-					owner: this.settings.githubUserName,
-					repo: this.settings.githubRepo,
+					owner,
+					repo,
 					path: "src/site/favicon.svg",
 				},
 			);
 
+			// GitHub API returns base64 with newlines, strip them for comparison
 			faviconsAreIdentical =
 				// @ts-expect-error TODO: abstract octokit response
-				currentFaviconOnSite.data.content ===
+				currentFaviconOnSite.data.content.replace(/\n/g, "") ===
 				base64SettingsFaviconContent;
 
 			if (faviconsAreIdentical) {
@@ -1343,14 +1918,141 @@ export default class SettingView {
 
 		if (!faviconExists || !faviconsAreIdentical) {
 			await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
-				owner: this.settings.githubUserName,
-				repo: this.settings.githubRepo,
+				owner,
+				repo,
 				path: "src/site/favicon.svg",
 				message: `Update favicon.svg`,
 				content: base64SettingsFaviconContent,
 				// @ts-expect-error TODO: abstract octokit response
 				sha: faviconExists ? currentFaviconOnSite.data.sha : null,
 			});
+		}
+	}
+
+	private async addLogo(octokit: Octokit, owner: string, repo: string) {
+		Logger.info(
+			`addLogo called, logoPath setting: "${this.settings.logoPath}", owner: "${owner}", repo: "${repo}"`,
+		);
+		const logoBasePath = "src/site/logo";
+
+		// First, try to delete any existing logo files
+		const logoExtensions = ["png", "jpg", "jpeg", "gif", "svg", "webp"];
+
+		for (const ext of logoExtensions) {
+			try {
+				const existingLogo = await octokit.request(
+					"GET /repos/{owner}/{repo}/contents/{path}",
+					{
+						owner,
+						repo,
+						path: `${logoBasePath}.${ext}`,
+					},
+				);
+
+				// Delete the existing logo if we're either clearing it or uploading a different format
+				if (existingLogo.data) {
+					const currentPath = this.settings.logoPath;
+
+					const currentExt = currentPath
+						? currentPath.split(".").pop()?.toLowerCase()
+						: null;
+
+					// Delete if no logo path set, or if the extension is different
+					if (!currentPath || currentExt !== ext) {
+						await octokit.request(
+							"DELETE /repos/{owner}/{repo}/contents/{path}",
+							{
+								owner,
+								repo,
+								path: `${logoBasePath}.${ext}`,
+								message: `Remove logo.${ext}`,
+								// @ts-expect-error TODO: abstract octokit response
+								sha: existingLogo.data.sha,
+							},
+						);
+					}
+				}
+			} catch {
+				// File doesn't exist, continue
+			}
+		}
+
+		// If no logo path is set, we're done (logo removed)
+		if (!this.settings.logoPath) {
+			return;
+		}
+
+		const logoFile = this.app.vault.getAbstractFileByPath(
+			this.settings.logoPath,
+		);
+
+		if (!(logoFile instanceof TFile)) {
+			new Notice(`${this.settings.logoPath} is not a valid file.`);
+
+			return;
+		}
+
+		const logoContent = await this.app.vault.readBinary(logoFile);
+		const base64LogoContent = arrayBufferToBase64(logoContent);
+		const logoExtension = logoFile.extension.toLowerCase();
+		const logoPath = `${logoBasePath}.${logoExtension}`;
+
+		Logger.info(
+			`Uploading logo from ${this.settings.logoPath} to ${logoPath}`,
+		);
+
+		let logoExists = true;
+		let logosAreIdentical = false;
+		let currentLogoOnSite = null;
+
+		try {
+			currentLogoOnSite = await octokit.request(
+				"GET /repos/{owner}/{repo}/contents/{path}",
+				{
+					owner,
+					repo,
+					path: logoPath,
+				},
+			);
+
+			// GitHub API returns base64 with newlines, strip them for comparison
+			logosAreIdentical =
+				// @ts-expect-error TODO: abstract octokit response
+				currentLogoOnSite.data.content.replace(/\n/g, "") ===
+				base64LogoContent;
+
+			if (logosAreIdentical) {
+				Logger.info("Logos are identical, skipping update");
+
+				return;
+			}
+		} catch {
+			logoExists = false;
+		}
+
+		if (!logoExists || !logosAreIdentical) {
+			try {
+				const requestPayload = {
+					owner,
+					repo,
+					path: logoPath,
+					message: `Update logo.${logoExtension}`,
+					content: base64LogoContent,
+					// @ts-expect-error TODO: abstract octokit response
+					...(logoExists ? { sha: currentLogoOnSite.data.sha } : {}),
+				};
+
+				await octokit.request(
+					"PUT /repos/{owner}/{repo}/contents/{path}",
+					requestPayload,
+				);
+			} catch (error) {
+				Logger.error("Failed to upload logo", error);
+
+				new Notice(
+					"Failed to upload logo. Check the developer console for details.",
+				);
+			}
 		}
 	}
 
@@ -1408,6 +2110,30 @@ export default class SettingView {
 						await this.saveSettings();
 					}),
 			);
+	}
+
+	private async openNavigationOrderModal() {
+		const connection =
+			await PublishPlatformConnectionFactory.createPublishPlatformConnection(
+				this.settings,
+			);
+		const repositoryConnection = new RepositoryConnection(connection);
+
+		const publisher = new Publisher(
+			this.app.vault,
+			this.app.metadataCache,
+			this.settings,
+		);
+
+		const modal = new NavigationOrderModal(
+			this.app,
+			repositoryConnection,
+			publisher,
+			this.settings,
+			this.saveSettings,
+		);
+
+		modal.open();
 	}
 
 	private openPathRewriteRulesModal() {
@@ -1517,32 +2243,72 @@ export default class SettingView {
 		) => Promise<void>,
 		siteManager: DigitalGardenSiteManager,
 	) {
-		this.settingsRootElement
-			.createEl("h3", { text: "Update site" })
+		const target = this.updateSectionAnchor ?? this.settingsRootElement;
+
+		target
+			.createEl("h3", { text: "Update site template" })
 			.prepend(getIcon("sync") ?? "");
+
+		// Show loading indicator while checking for updates
+		const loadingContainer = target.createDiv({
+			cls: "dg-update-loading",
+		});
+
+		new Setting(loadingContainer)
+			.setName("Site Template")
+			.setDesc("Checking for updates...")
+			.addButton((button) => {
+				button.setButtonText("Checking...");
+				button.setDisabled(true);
+			});
 
 		Logger.time("checkForUpdate");
 
-		const updater = await (
-			await siteManager.getTemplateUpdater()
-		).checkForUpdates();
+		let updater;
+
+		try {
+			updater = await (
+				await siteManager.getTemplateUpdater()
+			).checkForUpdates();
+		} catch (error) {
+			Logger.warn("Failed to check for template updates", error);
+			loadingContainer.empty();
+
+			new Setting(loadingContainer)
+				.setName("Site Template")
+				.setDesc(
+					"Unable to check for updates. Please check your connection and credentials.",
+				)
+				.addButton((button) => {
+					button.setButtonText("Check failed");
+					button.setDisabled(true);
+				});
+
+			return;
+		}
+
 		Logger.timeEnd("checkForUpdate");
+
+		// Replace loading indicator with actual state
+		loadingContainer.empty();
 
 		const updateAvailable = hasUpdates(updater);
 
-		new Setting(this.settingsRootElement)
+		new Setting(loadingContainer)
 			.setName("Site Template")
 			.setDesc(
-				"Manage updates to the base template. You should try updating the template when you update the plugin to make sure your garden support all features.",
+				updateAvailable
+					? "Manage updates to the base template. You should try updating the template when you update the plugin to make sure your garden support all features."
+					: `Your site template is up to date! (${
+							updater.newestTemplateVersion ?? "latest"
+					  })`,
 			)
 			.addButton(async (button) => {
-				button.setButtonText(`Checking...`);
-				Logger.time("checkForUpdate");
-
 				if (updateAvailable) {
 					button.setButtonText(
 						`Update to ${updater.newestTemplateVersion}`,
 					);
+					button.setCta();
 				} else {
 					button.setButtonText("Already up to date!");
 					button.setDisabled(true);
@@ -1552,23 +2318,57 @@ export default class SettingView {
 					modal.open();
 				});
 			});
-		modal.titleEl.createEl("h2", { text: "Update site" });
 
-		new Setting(modal.contentEl)
-			.setName("Update site to latest template")
-			.setDesc(
-				`
-				This will create a pull request with the latest template changes, which you'll need to use all plugin features. 
-				It will not publish any changes before you approve them.
-			`,
-			)
-			.addButton((button) =>
-				button
-					.setButtonText("Create PR")
-					.onClick(() =>
-						handlePR(button, updater as TemplateUpdater),
-					),
+		// Modal title
+		modal.titleEl.empty();
+
+		const titleContainer = modal.titleEl.createDiv({
+			cls: "dg-modal-title",
+		});
+		const syncIcon = getIcon("refresh-cw");
+
+		if (syncIcon) {
+			titleContainer.appendChild(syncIcon);
+		}
+		titleContainer.createSpan({ text: "Update Site Template" });
+
+		// Modal content
+		const updateSection = modal.contentEl.createDiv({
+			cls: "dg-update-section",
+		});
+
+		const infoContainer = updateSection.createDiv({
+			cls: "dg-update-info",
+		});
+
+		const infoIcon = getIcon("info");
+
+		if (infoIcon) {
+			infoContainer.appendChild(infoIcon);
+		}
+
+		infoContainer.createDiv({
+			cls: "dg-update-info-text",
+			text: "This will create a pull request with the latest template changes. Your site won't be updated until you approve the PR.",
+		});
+
+		const buttonContainer = updateSection.createDiv({
+			cls: "dg-update-button-container",
+		});
+
+		const createPrButton = buttonContainer.createEl("button", {
+			text: "Create Pull Request",
+			cls: "mod-cta",
+		});
+
+		createPrButton.addEventListener("click", () => {
+			handlePR(
+				{
+					setDisabled: (d) => (createPrButton.disabled = d),
+				} as ButtonComponent,
+				updater as TemplateUpdater,
 			);
+		});
 
 		this.settingsRootElement
 			.createEl("h3", { text: "Support" })
@@ -1596,30 +2396,59 @@ export default class SettingView {
 			return;
 		}
 
-		const header = modal.contentEl.createEl("h2", {
-			text: "➕ Recent Pull Request History",
+		const historySection = modal.contentEl.createDiv({
+			cls: "dg-pr-history",
 		});
-		const prsContainer = modal.contentEl.createEl("ul", {});
+
+		const header = historySection.createDiv({
+			cls: "dg-pr-history-header",
+		});
+
+		const chevronIcon = getIcon("chevron-right");
+
+		if (chevronIcon) {
+			header.appendChild(chevronIcon);
+		}
+
+		header.createSpan({ text: "Recent Pull Requests" });
+
+		const prsContainer = historySection.createDiv({
+			cls: "dg-pr-history-list",
+		});
 		prsContainer.hide();
 
-		header.onClickEvent(() => {
+		header.addEventListener("click", () => {
+			const chevron = header.querySelector(".svg-icon");
+
 			if (prsContainer.isShown()) {
 				prsContainer.hide();
-				header.textContent = "➕  Recent Pull Request History";
+				chevron?.removeClass("is-expanded");
 			} else {
 				prsContainer.show();
-				header.textContent = "➖ Recent Pull Request History";
+				chevron?.addClass("is-expanded");
 			}
 		});
 
-		previousPrUrls.map((prUrl) => {
-			const li = prsContainer.createEl("li", {
-				attr: { style: "margin-bottom: 10px" },
+		previousPrUrls.forEach((prUrl) => {
+			const prItem = prsContainer.createDiv({
+				cls: "dg-pr-history-item",
 			});
-			const prUrlElement = document.createElement("a");
-			prUrlElement.href = prUrl;
-			prUrlElement.textContent = prUrl;
-			li.appendChild(prUrlElement);
+
+			const gitPrIcon = getIcon("git-pull-request");
+
+			if (gitPrIcon) {
+				prItem.appendChild(gitPrIcon);
+			}
+
+			// Extract PR number from URL for display
+			const prNumber = prUrl.match(/\/pull\/(\d+)/)?.[1];
+			const displayText = prNumber ? `Pull Request #${prNumber}` : prUrl;
+
+			prItem.createEl("a", {
+				text: displayText,
+				href: prUrl,
+				cls: "dg-pr-history-link",
+			});
 		});
 	}
 }

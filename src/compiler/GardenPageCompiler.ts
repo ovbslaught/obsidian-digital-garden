@@ -11,6 +11,7 @@ import { PathRewriteRule } from "../repositoryConnection/DigitalGardenSiteManage
 import Publisher from "../publisher/Publisher";
 import {
 	fixSvgForXmlSerializer,
+	generateBlobHashFromBase64,
 	generateUrlPath,
 	getGardenPathForNote,
 	getRewriteRules,
@@ -31,6 +32,7 @@ import {
 } from "../utils/regexes";
 import Logger from "js-logger";
 import { DataviewCompiler } from "./DataviewCompiler";
+import { CanvasCompiler, ITextNodeProcessor } from "./CanvasCompiler";
 
 // PDF embedding constants
 const PDF_MAX_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
@@ -42,8 +44,7 @@ import { replaceBlockIDs } from "./replaceBlockIDs";
 export interface Asset {
 	path: string;
 	content: string;
-	// not set yet
-	remoteHash?: string;
+	localHash?: string;
 }
 export interface Assets {
 	images: Array<Asset>;
@@ -57,10 +58,11 @@ export type TCompilerStep = (
 	| ((partiallyCompiledContent: string) => Promise<string>)
 	| ((partiallyCompiledContent: string) => string);
 
-export class GardenPageCompiler {
+export class GardenPageCompiler implements ITextNodeProcessor {
 	private readonly vault: Vault;
 	private readonly settings: DigitalGardenSettings;
 	private excalidrawCompiler: ExcalidrawCompiler;
+	private canvasCompiler: CanvasCompiler;
 	private metadataCache: MetadataCache;
 	private readonly getFilesMarkedForPublishing: Publisher["getFilesMarkedForPublishing"];
 
@@ -77,8 +79,78 @@ export class GardenPageCompiler {
 		this.metadataCache = metadataCache;
 		this.getFilesMarkedForPublishing = getFilesMarkedForPublishing;
 		this.excalidrawCompiler = new ExcalidrawCompiler(vault);
+
+		this.canvasCompiler = new CanvasCompiler(
+			vault,
+			metadataCache,
+			settings,
+		);
+		this.canvasCompiler.setTextNodeProcessor(this);
 		this.rewriteRules = getRewriteRules(this.settings.pathRewriteRules);
 	}
+
+	/**
+	 * Process text content from canvas text nodes through the same pipeline as notes.
+	 * This enables wiki-links, transclusions, dataview, etc. in canvas text nodes.
+	 */
+	async processTextNodeContent(
+		file: PublishFile,
+		text: string,
+		assets?: Asset[],
+	): Promise<string> {
+		// Apply compile steps relevant to text node content
+		// Note: We skip frontmatter conversion since text nodes don't have frontmatter
+		const CANVAS_TEXT_COMPILE_STEPS: TCompilerStep[] = [
+			this.convertCustomFilters,
+			this.createBlockIDs,
+			this.createTranscludedText(0),
+			this.convertDataViews,
+			this.convertLinksToFullPath,
+			this.removeObsidianComments,
+			this.createSvgEmbeds,
+		];
+
+		const compiledText = await this.runCompilerSteps(
+			file,
+			CANVAS_TEXT_COMPILE_STEPS,
+		)(text);
+
+		const [processedText, collectedAssets] =
+			await this.convertEmbeddedAssets(file)(compiledText);
+
+		if (assets) {
+			assets.push(...collectedAssets);
+		}
+
+		return processedText;
+	}
+
+	private resolveLinkedFile = (
+		linkPath: string,
+		sourcePath: string,
+	): TFile | null => {
+		if (linkPath === "") {
+			return null;
+		}
+
+		return (
+			this.metadataCache.getFirstLinkpathDest(linkPath, sourcePath) ??
+			null
+		);
+	};
+
+	private extractWikilinkTarget = (wikilink: string): string => {
+		const start = wikilink.indexOf("[[") + 2;
+		const end = wikilink.indexOf("]]");
+
+		if (start < 2 || end < 0) {
+			return "";
+		}
+
+		const [name] = wikilink.substring(start, end).split("|");
+
+		return getLinkpath(name);
+	};
 
 	runCompilerSteps =
 		(file: PublishFile, compilerSteps: TCompilerStep[]) =>
@@ -107,6 +179,15 @@ export class GardenPageCompiler {
 			];
 		}
 
+		if (file.file.extension === "canvas") {
+			return [
+				await this.canvasCompiler.compileMarkdown({
+					assets: assets.images,
+				})(file)(vaultFileText),
+				assets,
+			];
+		}
+
 		// ORDER MATTERS!
 		const COMPILE_STEPS: TCompilerStep[] = [
 			this.convertFrontMatter,
@@ -126,6 +207,10 @@ export class GardenPageCompiler {
 
 		const [text, images] =
 			await this.convertEmbeddedAssets(file)(compiledText);
+
+		// Also extract images referenced in frontmatter properties
+		const frontmatterImages = await this.extractFrontmatterAssets(file);
+		images.push(...frontmatterImages);
 
 		return [text, { images }];
 	}
@@ -241,6 +326,24 @@ export class GardenPageCompiler {
 						headerPath =
 							headerSplit.length > 1 ? `#${headerSplit[1]}` : "";
 					}
+
+					// Same-file header link, e.g. [[#My Header]] or [[#My Header|display]]
+					if (linkedFileName === "" && headerPath !== "") {
+						const currentFilePath = file.getPath();
+
+						const currentExtensionlessPath =
+							currentFilePath.substring(
+								0,
+								currentFilePath.lastIndexOf("."),
+							);
+
+						convertedText = convertedText.replaceAll(
+							linkMatch,
+							`[[${currentExtensionlessPath}${headerPath}\\|${linkDisplayName}]]`,
+						);
+						continue;
+					}
+
 					const fullLinkedFilePath = getLinkpath(linkedFileName);
 
 					if (fullLinkedFilePath === "") {
@@ -253,22 +356,31 @@ export class GardenPageCompiler {
 					);
 
 					if (!linkedFile) {
-						convertedText = convertedText.replace(
+						convertedText = convertedText.replaceAll(
 							linkMatch,
 							`[[${linkedFileName}${headerPath}\\|${linkDisplayName}]]`,
 						);
 						continue;
 					}
 
-					if (linkedFile.extension === "md") {
+					if (
+						linkedFile.extension === "md" ||
+						linkedFile.extension === "canvas"
+					) {
 						const extensionlessPath = linkedFile.path.substring(
 							0,
 							linkedFile.path.lastIndexOf("."),
 						);
 
-						convertedText = convertedText.replace(
+						// Keep .canvas extension in links for canvas files
+						const linkPath =
+							linkedFile.extension === "canvas"
+								? `${extensionlessPath}.canvas`
+								: extensionlessPath;
+
+						convertedText = convertedText.replaceAll(
 							linkMatch,
-							`[[${extensionlessPath}${headerPath}\\|${linkDisplayName}]]`,
+							`[[${linkPath}${headerPath}\\|${linkDisplayName}]]`,
 						);
 					}
 				} catch (e) {
@@ -306,6 +418,20 @@ export class GardenPageCompiler {
 							transclusionMatch.indexOf("]"),
 						)
 						.split("|");
+
+					// Check if it's a YouTube URL embed
+					const youtubeId =
+						this.extractYouTubeId(transclusionFileName);
+
+					if (youtubeId) {
+						const youtubeEmbed = `<div class="youtube-embed"><iframe src="https://www.youtube.com/embed/${youtubeId}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>`;
+
+						transcludedText = transcludedText.replace(
+							transclusionMatch,
+							youtubeEmbed,
+						);
+						continue;
+					}
 
 					const transclusionFilePath =
 						getLinkpath(transclusionFileName);
@@ -351,6 +477,17 @@ export class GardenPageCompiler {
 						transcludedText = transcludedText.replace(
 							transclusionMatch,
 							excaliDrawCode,
+						);
+					} else if (linkedFile.extension === "base") {
+						// Embed .base file contents as a ```base code block
+						const baseFileText = await this.vault.read(linkedFile);
+
+						const baseCodeBlock =
+							"\n```base\n" + baseFileText + "\n```\n";
+
+						transcludedText = transcludedText.replace(
+							transclusionMatch,
+							baseCodeBlock,
 						);
 					} else if (linkedFile.extension === "md") {
 						let fileText = await publishLinkedFile.cachedRead();
@@ -489,7 +626,7 @@ export class GardenPageCompiler {
 						//This should be recursive up to a certain depth
 						transcludedText = transcludedText.replace(
 							transclusionMatch,
-							fileText,
+							() => fileText,
 						);
 					}
 				} catch (error) {
@@ -520,7 +657,7 @@ export class GardenPageCompiler {
 				try {
 					const [imageName, size] = svg
 						.substring(svg.indexOf("[") + 2, svg.indexOf("]"))
-						.split("|");
+						.split(/\\?\|/);
 					const imagePath = getLinkpath(imageName);
 
 					if (imagePath === "") {
@@ -562,7 +699,7 @@ export class GardenPageCompiler {
 				try {
 					const [_imageName, size] = svg
 						.substring(svg.indexOf("[") + 2, svg.indexOf("]"))
-						.split("|");
+						.split(/\\?\|/);
 					const pathStart = svg.lastIndexOf("(") + 1;
 					const pathEnd = svg.lastIndexOf(")");
 					const imagePath = svg.substring(pathStart, pathEnd);
@@ -599,13 +736,68 @@ export class GardenPageCompiler {
 		return text;
 	};
 
+	/**
+	 * Scan frontmatter properties for values that look like image paths
+	 * and include them as assets so they get published alongside the note.
+	 */
+	private async extractFrontmatterAssets(
+		file: PublishFile,
+	): Promise<Array<Asset>> {
+		const assets: Array<Asset> = [];
+
+		const frontmatter = this.metadataCache.getFileCache(file.file)
+			?.frontmatter;
+
+		if (!frontmatter) return assets;
+
+		const imageExtensions = /\.(png|jpg|jpeg|gif|webp|svg)$/i;
+
+		const scanValue = async (value: unknown) => {
+			if (typeof value === "string" && imageExtensions.test(value)) {
+				// Skip external URLs
+				if (value.startsWith("http")) return;
+
+				try {
+					const linkedFile = this.resolveLinkedFile(
+						value,
+						file.getPath(),
+					);
+
+					if (!linkedFile) return;
+
+					const image = await this.vault.readBinary(linkedFile);
+					const imageBase64 = arrayBufferToBase64(image);
+
+					assets.push({
+						path: `/img/user/${linkedFile.path}`,
+						content: imageBase64,
+						localHash: generateBlobHashFromBase64(imageBase64),
+					});
+				} catch {
+					// Skip unresolvable paths
+				}
+			} else if (Array.isArray(value)) {
+				for (const item of value) {
+					await scanValue(item);
+				}
+			}
+		};
+
+		for (const [key, value] of Object.entries(frontmatter)) {
+			if (key === "position") continue;
+			await scanValue(value);
+		}
+
+		return assets;
+	}
+
 	extractImageLinks = async (file: PublishFile) => {
 		const text = await file.cachedRead();
 		const assets = [];
 
-		//![[image.png]]
+		//![[image.png]] or ![[file.pdf]]
 		const transcludedImageRegex =
-			/!\[\[(.*?)(\.(png|jpg|jpeg|gif|webp))\|(.*?)\]\]|!\[\[(.*?)(\.(png|jpg|jpeg|gif|webp))\]\]/g;
+			/!\[\[(.*?)(\.(png|jpg|jpeg|gif|webp|pdf))\\?\|(.*?)\]\]|!\[\[(.*?)(\.(png|jpg|jpeg|gif|webp|pdf))\]\]/g;
 		const transcludedImageMatches = text.match(transcludedImageRegex);
 
 		if (transcludedImageMatches) {
@@ -618,14 +810,10 @@ export class GardenPageCompiler {
 							imageMatch.indexOf("[") + 2,
 							imageMatch.indexOf("]"),
 						)
-						.split("|");
+						.split(/\\?\|/);
 					const imagePath = getLinkpath(imageName);
 
-					if (imagePath === "") {
-						continue;
-					}
-
-					const linkedFile = this.metadataCache.getFirstLinkpathDest(
+					const linkedFile = this.resolveLinkedFile(
 						imagePath,
 						file.getPath(),
 					);
@@ -641,8 +829,9 @@ export class GardenPageCompiler {
 			}
 		}
 
-		//![](image.png)
-		const imageRegex = /!\[(.*?)\]\((.*?)(\.(png|jpg|jpeg|gif|webp))\)/g;
+		//![](image.png) or ![](file.pdf)
+		const imageRegex =
+			/!\[(.*?)\]\((.*?)(\.(png|jpg|jpeg|gif|webp|pdf))\)/g;
 		const imageMatches = text.match(imageRegex);
 
 		if (imageMatches) {
@@ -660,11 +849,7 @@ export class GardenPageCompiler {
 
 					const decodedImagePath = decodeURI(imagePath);
 
-					if (decodedImagePath === "") {
-						continue;
-					}
-
-					const linkedFile = this.metadataCache.getFirstLinkpathDest(
+					const linkedFile = this.resolveLinkedFile(
 						decodedImagePath,
 						file.getPath(),
 					);
@@ -677,6 +862,36 @@ export class GardenPageCompiler {
 				} catch {
 					continue;
 				}
+			}
+		}
+
+		// [[image.png]] or [[file.pdf]] (linked, not embedded)
+		const linkedImageRegex =
+			/\[\[(.*?)(\.(png|jpg|jpeg|gif|webp|svg|pdf))(.*?)\]\]/g;
+		const linkedImageMatches = text.matchAll(linkedImageRegex);
+
+		for (const match of linkedImageMatches) {
+			try {
+				const matchIndex = match.index ?? -1;
+
+				if (matchIndex > 0 && text[matchIndex - 1] === "!") {
+					continue;
+				}
+
+				const imagePath = this.extractWikilinkTarget(match[0]);
+
+				const linkedFile = this.resolveLinkedFile(
+					imagePath,
+					file.getPath(),
+				);
+
+				if (!linkedFile) {
+					continue;
+				}
+
+				assets.push(linkedFile.path);
+			} catch {
+				continue;
 			}
 		}
 
@@ -693,7 +908,7 @@ export class GardenPageCompiler {
 
 			//![[image.png]]
 			const transcludedImageRegex =
-				/!\[\[(.*?)(\.(png|jpg|jpeg|gif|webp))\|(.*?)\]\]|!\[\[(.*?)(\.(png|jpg|jpeg|gif|webp))\]\]/g;
+				/!\[\[(.*?)(\.(png|jpg|jpeg|gif|webp))\\?\|(.*?)\]\]|!\[\[(.*?)(\.(png|jpg|jpeg|gif|webp))\]\]/g;
 			const transcludedImageMatches = text.match(transcludedImageRegex);
 
 			if (transcludedImageMatches) {
@@ -709,7 +924,7 @@ export class GardenPageCompiler {
 								imageMatch.indexOf("[") + 2,
 								imageMatch.indexOf("]"),
 							)
-							.split("|");
+							.split(/\\?\|/);
 
 						const lastValue =
 							metaDataAndSize[metaDataAndSize.length - 1];
@@ -743,15 +958,10 @@ export class GardenPageCompiler {
 
 						const imagePath = getLinkpath(imageName);
 
-						if (imagePath === "") {
-							continue;
-						}
-
-						const linkedFile =
-							this.metadataCache.getFirstLinkpathDest(
-								imagePath,
-								filePath,
-							);
+						const linkedFile = this.resolveLinkedFile(
+							imagePath,
+							filePath,
+						);
 
 						if (!linkedFile) {
 							continue;
@@ -763,11 +973,11 @@ export class GardenPageCompiler {
 						let name = "";
 
 						if (metaData && size) {
-							name = `${imageName}|${metaData}|${size}`;
+							name = `${imageName}\\|${metaData}\\|${size}`;
 						} else if (size) {
-							name = `${imageName}|${size}`;
+							name = `${imageName}\\|${size}`;
 						} else if (metaData && metaData !== "") {
-							name = `${imageName}|${metaData}`;
+							name = `${imageName}\\|${metaData}`;
 						} else {
 							name = imageName;
 						}
@@ -776,7 +986,11 @@ export class GardenPageCompiler {
 							cmsImgPath,
 						)})`;
 
-						assets.push({ path: cmsImgPath, content: imageBase64 });
+						assets.push({
+							path: cmsImgPath,
+							content: imageBase64,
+							localHash: generateBlobHashFromBase64(imageBase64),
+						});
 
 						imageText = imageText.replace(
 							imageMatch,
@@ -784,6 +998,32 @@ export class GardenPageCompiler {
 						);
 					} catch (e) {
 						continue;
+					}
+				}
+			}
+
+			// ![](youtubelink)
+			const youtubeRegex =
+				/!\[([^\]]*)\]\((https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)[^)]+)\)/g;
+			const youtubeMatches = text.match(youtubeRegex);
+
+			if (youtubeMatches) {
+				for (let i = 0; i < youtubeMatches.length; i++) {
+					const youtubeMatch = youtubeMatches[i];
+
+					const urlStart = youtubeMatch.lastIndexOf("(") + 1;
+					const urlEnd = youtubeMatch.lastIndexOf(")");
+					const url = youtubeMatch.substring(urlStart, urlEnd);
+
+					const youtubeId = this.extractYouTubeId(url);
+
+					if (youtubeId) {
+						const youtubeEmbed = `<div class="youtube-embed"><iframe src="https://www.youtube.com/embed/${youtubeId}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>`;
+
+						imageText = imageText.replace(
+							youtubeMatch,
+							youtubeEmbed,
+						);
 					}
 				}
 			}
@@ -820,15 +1060,10 @@ export class GardenPageCompiler {
 
 						const decodedImagePath = decodeURI(imagePath);
 
-						if (decodedImagePath === "") {
-							continue;
-						}
-
-						const linkedFile =
-							this.metadataCache.getFirstLinkpathDest(
-								decodedImagePath,
-								filePath,
-							);
+						const linkedFile = this.resolveLinkedFile(
+							decodedImagePath,
+							filePath,
+						);
 
 						if (!linkedFile) {
 							continue;
@@ -840,7 +1075,12 @@ export class GardenPageCompiler {
 						const imageMarkdown = `![${imageName}](${encodeURI(
 							cmsImgPath,
 						)})`;
-						assets.push({ path: cmsImgPath, content: imageBase64 });
+
+						assets.push({
+							path: cmsImgPath,
+							content: imageBase64,
+							localHash: generateBlobHashFromBase64(imageBase64),
+						});
 
 						imageText = imageText.replace(
 							imageMatch,
@@ -850,6 +1090,73 @@ export class GardenPageCompiler {
 						Logger.warn("Error processing image link:", e);
 						continue;
 					}
+				}
+			}
+
+			// [[image.png]] or [[file.pdf]] (linked, not embedded)
+			const linkedImageRegex =
+				/\[\[(.*?)(\.(png|jpg|jpeg|gif|webp|svg|pdf))(.*?)\]\]/g;
+			const linkedImageMatches = text.matchAll(linkedImageRegex);
+
+			for (const match of linkedImageMatches) {
+				try {
+					const matchIndex = match.index ?? -1;
+
+					if (matchIndex > 0 && text[matchIndex - 1] === "!") {
+						continue;
+					}
+
+					const rawMatch = match[0];
+
+					const textInsideBrackets = rawMatch.substring(
+						rawMatch.indexOf("[[") + 2,
+						rawMatch.lastIndexOf("]]"),
+					);
+
+					const pipeIndex = textInsideBrackets.indexOf("|");
+
+					let linkedFileName =
+						pipeIndex === -1
+							? textInsideBrackets
+							: textInsideBrackets.substring(0, pipeIndex);
+
+					const linkDisplayName =
+						pipeIndex === -1
+							? linkedFileName
+							: textInsideBrackets.substring(pipeIndex + 1);
+
+					if (linkedFileName.endsWith("\\")) {
+						linkedFileName = linkedFileName.substring(
+							0,
+							linkedFileName.length - 1,
+						);
+					}
+
+					const fullLinkedFilePath = getLinkpath(linkedFileName);
+
+					if (fullLinkedFilePath === "") {
+						continue;
+					}
+
+					const linkedFile = this.resolveLinkedFile(
+						fullLinkedFilePath,
+						filePath,
+					);
+
+					if (!linkedFile) {
+						continue;
+					}
+
+					const cmsImgPath = `/img/user/${linkedFile.path}`;
+
+					const imageMarkdown = `[${linkDisplayName}](${encodeURI(
+						cmsImgPath,
+					)})`;
+
+					imageText = imageText.replace(rawMatch, imageMarkdown);
+				} catch (e) {
+					Logger.warn("Error processing linked image:", e);
+					continue;
 				}
 			}
 
@@ -942,7 +1249,11 @@ export class GardenPageCompiler {
 						const pdfBase64 = arrayBufferToBase64(pdfBinary);
 						const cmsPdfPath = `/img/user/${linkedFile.path}`;
 
-						assets.push({ path: cmsPdfPath, content: pdfBase64 });
+						assets.push({
+							path: cmsPdfPath,
+							content: pdfBase64,
+							localHash: generateBlobHashFromBase64(pdfBase64),
+						});
 
 						imageText = imageText.replace(
 							pdfMatch,
@@ -1047,7 +1358,11 @@ export class GardenPageCompiler {
 						const pdfBase64 = arrayBufferToBase64(pdfBinary);
 						const cmsPdfPath = `/img/user/${linkedFile.path}`;
 
-						assets.push({ path: cmsPdfPath, content: pdfBase64 });
+						assets.push({
+							path: cmsPdfPath,
+							content: pdfBase64,
+							localHash: generateBlobHashFromBase64(pdfBase64),
+						});
 
 						imageText = imageText.replace(
 							pdfMatch,
@@ -1094,5 +1409,22 @@ export class GardenPageCompiler {
 		}
 
 		return fixMarkdownHeaderSyntax(headerName);
+	}
+
+	private extractYouTubeId(url: string): string | null {
+		const patterns = [
+			/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+			/youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]{11})/,
+		];
+
+		for (const pattern of patterns) {
+			const match = url.match(pattern);
+
+			if (match && match[1]) {
+				return match[1];
+			}
+		}
+
+		return null;
 	}
 }
